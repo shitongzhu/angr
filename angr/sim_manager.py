@@ -261,6 +261,51 @@ class SimulationManager:
 
         return self
 
+    def exhaustive_explore(self, stash='active', n=None, find=None, avoid=None, find_stash='found', avoid_stash='avoid', 
+                           cfg=None, **kwargs):
+        """
+        Tick stash "stash" forward (up to "n" times or until "num_find" states are found), looking for condition "find",
+        avoiding condition "avoid". Stores found states into "find_stash' and avoided states into "avoid_stash".
+
+        The "find" and "avoid" parameters may be any of:
+
+        - An address to find
+        - A set or list of addresses to find
+        - A function that takes a state and returns whether or not it matches.
+
+        If an angr CFG is passed in as the "cfg" parameter and "find" is either a number or a list or a set, then
+        any states which cannot possibly reach a success state without going through a failure state will be
+        preemptively avoided.
+        """
+        tech = self.use_technique(ExhaustiveExplorer(find, avoid, find_stash, avoid_stash, cfg))
+
+        # Modify first Veritesting so that they can work together.
+        deviation_filter_saved = None
+        for t in self._techniques:
+            if isinstance(t,Veritesting):
+                deviation_filter_saved = t.options.get("deviation_filter",None)
+                if deviation_filter_saved is not None:
+                    t.options["deviation_filter"] = lambda s: tech.find(s) or tech.avoid(s) or deviation_filter_saved(s)
+                else:
+                    t.options["deviation_filter"] = lambda s: tech.find(s) or tech.avoid(s)
+                break
+
+        try:
+            self.run(stash=stash, n=n, **kwargs)
+        finally:
+            self.remove_technique(tech)
+
+        for t in self._techniques:
+            if isinstance(t,Veritesting):
+                if deviation_filter_saved is None:
+                    del t.options["deviation_filter"]
+                else:
+                    t.options["deviation_filter"] = deviation_filter_saved
+                break
+
+        return self
+
+
     def run(self, stash='active', n=None, until=None, **kwargs):
         """
         Run until the SimulationManager has reached a completed state, according to
@@ -828,4 +873,4 @@ from .errors import SimError, SimMergeError
 from .sim_state import SimState
 from .state_hierarchy import StateHierarchy
 from .errors import AngrError, SimUnsatError, SimulationManagerError
-from .exploration_techniques import ExplorationTechnique, Veritesting, Threading, Explorer
+from .exploration_techniques import ExplorationTechnique, Veritesting, Threading, Explorer, ExhaustiveExplorer

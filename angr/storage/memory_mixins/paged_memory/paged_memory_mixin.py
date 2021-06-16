@@ -188,6 +188,8 @@ class PagedMemoryMixin(MemoryMixin):
 
         sub_gen.close()
 
+    # Var tracing @ NeuSE
+    # Remove the return type to add the bytes
     def merge(self, others: Iterable['PagedMemoryMixin'], merge_conditions, common_ancestor=None) -> bool:
         changed_pages_and_offsets: Dict[int,Optional[Set[int]]] = {}
         for o in others:
@@ -230,8 +232,12 @@ class PagedMemoryMixin(MemoryMixin):
                                         changed_offsets=changed_offsets)
             for off in merged_offsets:
                 merged_bytes.add(page_addr + off)
-
-        return True if merged_bytes else False
+        
+        # Var tracing @ NeuSE
+        if merged_bytes:
+            return True, merged_bytes
+        else:
+            return False, None
 
     def permissions(self, addr, permissions=None, **kwargs):
         if type(addr) is not int:

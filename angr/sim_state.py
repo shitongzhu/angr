@@ -631,7 +631,8 @@ class SimState(PluginHub):
 
         return state
 
-    def merge(self, *others, **kwargs):
+    # Var tracing @ NeuSE
+    def merge(self, *others, return_merged_bytes=False, **kwargs):
         """
         Merges this state with the other states. Returns the merging result, merged state, and the merge flag.
 
@@ -670,6 +671,10 @@ class SimState(PluginHub):
 
         if len(set(o.arch.name for o in others)) != 1:
             raise SimMergeError("Unable to merge due to different architectures.")
+
+        # Var tracing @ NeuSE
+        if return_merged_bytes:
+            l.info("return_merged_bytes is activated")
 
         all_plugins = set(self.plugins.keys()) | set.union(*(set(o.plugins.keys()) for o in others))
 
@@ -713,16 +718,28 @@ class SimState(PluginHub):
                     plugin_class is SimStateHistory and \
                     common_ancestor_history is not None:
                 plugin_common_ancestor = common_ancestor_history
-
-            plugin_state_merged = our_filled_plugin.merge(
-                their_filled_plugins, merge_conditions, common_ancestor=plugin_common_ancestor,
-            )
+            
+            # Var tracing @ NeuSE
+            # Right now the tracing only applies to PagedMemoryMixin
+            if return_merged_bytes and \
+                    isinstance(our_filled_plugin, angr.storage.memory_mixins.PagedMemoryMixin):
+                plugin_state_merged, merged_bytes = our_filled_plugin.merge(
+                    their_filled_plugins, merge_conditions, common_ancestor=plugin_common_ancestor,
+                )
+            else:
+                plugin_state_merged = our_filled_plugin.merge(
+                    their_filled_plugins, merge_conditions, common_ancestor=plugin_common_ancestor,
+                )
             if plugin_state_merged:
                 l.debug('Merging occurred in %s', p)
                 merging_occurred = True
 
         merged.add_constraints(merged.solver.Or(*merge_conditions))
-        return merged, merge_conditions, merging_occurred
+        # Var tracing @ NeuSE
+        if return_merged_bytes:
+            return merged, merge_conditions, merging_occurred, merged_bytes
+        else:
+            return merged, merge_conditions, merging_occurred
 
     def widen(self, *others):
         """

@@ -673,7 +673,8 @@ class SimulationManager:
                 [x.func_addr for x in state.callstack],
                 set(state.posix.fd) if state.has_plugin('posix') else None)
 
-    def merge(self, merge_func=None, merge_key=None, stash='active'):
+    # Var tracing @ NeuSE
+    def merge(self, merge_func=None, merge_key=None, stash='active', return_merged_bytes=False):
         """
         Merge the states in a given stash.
 
@@ -692,6 +693,10 @@ class SimulationManager:
         not_to_merge = []
         if merge_key is None: merge_key = self._merge_key
 
+        # Var tracing @ NeuSE
+        if return_merged_bytes:
+            l.info("return_merged_bytes is activated")
+
         merge_groups = [ ]
         while to_merge:
             base_key = merge_key(to_merge[0])
@@ -701,17 +706,33 @@ class SimulationManager:
             else:
                 merge_groups.append(g)
 
+        # Var tracing @ NeuSE
+        all_groups_merged_bytes = set()
         for g in merge_groups:
             try:
-                m = self._merge_states(g) if merge_func is None else merge_func(*g)
+                if merge_func is None:
+                    # Var tracing @ NeuSE
+                    if return_merged_bytes:
+                        m, group_merged_bytes = self._merge_states(g, return_merged_bytes, set())  # initial container is a set
+                    else:
+                        m = self._merge_states(g, return_merged_bytes)
+                else:
+                    # we do not support var tracing for customized merge functions
+                    # at the point
+                    m = merge_func(*g)
                 not_to_merge.append(m)
+                all_groups_merged_bytes.update(group_merged_bytes)
             except SimMergeError:
                 l.warning("SimMergeError while merging %d states", len(g), exc_info=True)
                 not_to_merge.extend(g)
 
         self._clear_states(stash)
         self._store_states(stash, not_to_merge)
-        return self
+        # Var tracing @ NeuSE
+        if return_merged_bytes:
+            return self, all_groups_merged_bytes
+        else:
+            return self
 
     #
     #   ...
@@ -747,7 +768,8 @@ class SimulationManager:
             (match if filter_func(state) else nomatch).append(state)
         return match, nomatch
 
-    def _merge_states(self, states):
+    # Var tracing @ NeuSE
+    def _merge_states(self, states, return_merged_bytes, aggregate_merged_bytes=None):
         """
         Merges a list of states.
 
@@ -767,10 +789,19 @@ class SimulationManager:
             constraints = [s.history.constraints_since(common_history) for s in optimal]
 
             o = optimal[0]
-            m, _, _ = o.merge(*optimal[1:],
-                              merge_conditions=constraints,
-                              common_ancestor=common_history.strongref_state
-                              )
+            # Var tracing @ NeuSE
+            if return_merged_bytes:
+                m, _, _, merged_bytes = o.merge(*optimal[1:],
+                                                merge_conditions=constraints,
+                                                common_ancestor=common_history.strongref_state,
+                                                return_merged_bytes=return_merged_bytes,
+                                                )
+            else:
+                m, _, _ = o.merge(*optimal[1:],
+                                  merge_conditions=constraints,
+                                  common_ancestor=common_history.strongref_state,
+                                  return_merged_bytes=return_merged_bytes,
+                                  )
 
         else:
             l.warning(
@@ -778,7 +809,13 @@ class SimulationManager:
                 "and merge all states."
                 )
             s = states[0]
-            m, _, _ = s.merge(*states[1:])
+            # Var tracing @ NeuSE
+            if return_merged_bytes:
+                m, _, _, merged_bytes = s.merge(*states[1:], return_merged_bytes=return_merged_bytes)
+                # aggregate_merged_bytes should be a set
+                aggregate_merged_bytes.update(merged_bytes)
+            else:
+                m, _, _ = s.merge(*states[1:], return_merged_bytes=return_merged_bytes)
 
             others = []
 
@@ -787,9 +824,19 @@ class SimulationManager:
 
         if len(others):
             others.append(m)
-            return self._merge_states(others)
+            # Var tracing @ NeuSE
+            # This seems to be recursively merging all states so our tracing needs
+            # to alter return values to include the merged bytes
+            if return_merged_bytes:
+                return self._merge_states(others, return_merged_bytes, aggregate_merged_bytes)
+            else:
+                return self._merge_states(others, return_merged_bytes)
         else:
-            return m
+            # Lastly we return the aggregate merged bytes
+            if return_merged_bytes:
+                return m, aggregate_merged_bytes
+            else:
+                return m
 
     #
     #   ...

@@ -64,7 +64,9 @@ class MemoryMixin(SimStatePlugin):
     def store(self, addr, data, **kwargs):
         pass
 
-    def merge(self, others, merge_conditions, common_ancestor=None) -> bool:
+    # Var tracing @ NeuSE
+    # Return type is removed for returning merged bytes.
+    def merge(self, others, merge_conditions, common_ancestor=None):
         pass
 
     def widen(self, others):

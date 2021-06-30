@@ -768,7 +768,8 @@ class SimulationManager:
             if return_merged_bytes:
                 m, _, _, merged_bytes = s.merge(*states[1:], return_merged_bytes=return_merged_bytes)
                 # aggregate_merged_bytes should be a set
-                aggregate_merged_bytes.update(merged_bytes)
+                if merged_bytes is not None:
+                    aggregate_merged_bytes.update(merged_bytes)
             else:
                 m, _, _ = s.merge(*states[1:], return_merged_bytes=return_merged_bytes)
 

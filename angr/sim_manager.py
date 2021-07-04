@@ -261,7 +261,8 @@ class SimulationManager:
 
         return self
 
-    def run(self, stash='active', n=None, until=None, **kwargs):
+    # Added pluggable logger
+    def run(self, stash='active', n=None, until=None, logger=None, drop_states=False, **kwargs):
         """
         Run until the SimulationManager has reached a completed state, according to
         the current exploration techniques. If no exploration techniques that define a completion
@@ -275,9 +276,14 @@ class SimulationManager:
         :return:            The simulation manager, for chaining.
         :rtype:             SimulationManager
         """
-        for _ in (itertools.count() if n is None else range(0, n)):
+        for i in (itertools.count() if n is None else range(0, n)):
             if not self.complete() and self._stashes[stash]:
+                if logger is not None:
+                    logger.debug("[sim_manager] Stepped once: %d | %s | drop: %s" % (i, str(self), str(drop_states)))
                 self.step(stash=stash, **kwargs)
+                if drop_states:
+                    for stash_name in ("errored", "deadended", "avoid", "unsat", "unconstrained", "pruned"):
+                        self.drop(stash=stash_name)
                 if not (until and until(self)):
                     continue
             break

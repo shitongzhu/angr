@@ -262,7 +262,7 @@ class SimulationManager:
         return self
 
     # Added pluggable logger
-    def run(self, stash='active', n=None, until=None, logger=None, drop_states=False, **kwargs):
+    def run(self, stash='active', n=None, until=None, logger=None, drop_invalid_states=False, drop_long_exprs=False, **kwargs):
         """
         Run until the SimulationManager has reached a completed state, according to
         the current exploration techniques. If no exploration techniques that define a completion
@@ -279,11 +279,37 @@ class SimulationManager:
         for i in (itertools.count() if n is None else range(0, n)):
             if not self.complete() and self._stashes[stash]:
                 if logger is not None:
-                    logger.debug("[sim_manager] Stepped once: %d | %s | drop: %s" % (i, str(self), str(drop_states)))
+                    logger.debug("[sim_manager] Stepping once: %d | %s | drop invalid: %s | drop long: %s" % (i, str(self), str(drop_invalid_states), str(drop_long_exprs)))
+                    for state in self._stashes[stash]:
+                        state_constraints = []
+                        for constraint in state.solver.constraints:
+                            state_constraints.append(str(constraint))
+                        logger.debug('[sim_manager] Constraints for state %s: %s' % (str(state), str(state_constraints)))
                 self.step(stash=stash, **kwargs)
-                if drop_states:
+
+                if drop_invalid_states:
                     for stash_name in ("errored", "deadended", "avoid", "unsat", "unconstrained", "pruned"):
                         self.drop(stash=stash_name)
+                
+                if drop_long_exprs:
+                    dropped_states = []
+                    kept_states = []
+                    for state in self._stashes[stash]:
+                        for constraint in state.solver.constraints:
+                            if constraint.length is not None:
+                                if logger is not None:
+                                    logger.error("[sim_manager] Encountered an expr with length > 256")
+                                dropped_states.append(state)
+                                break
+                            if constraint.depth > 32:
+                                if logger is not None:
+                                    logger.error("[sim_manager] Encountered an expr with depth > 32")
+                                dropped_states.append(state)
+                                break
+                        kept_states.append(state)
+                    self._stashes[stash] = kept_states
+                    self._stashes["pruned"].extend(dropped_states)
+
                 if not (until and until(self)):
                     continue
             break

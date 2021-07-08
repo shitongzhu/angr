@@ -286,7 +286,7 @@ class SimulationManager:
         for i in (itertools.count() if n is None else range(0, n)):
             if not self.complete() and self._stashes[stash]:
                 if logger is not None:
-                    logger.debug("[sim_manager] Stepping once: %d | %s | drop invalid: %s | drop long: %s" % (i, str(self), str(drop_invalid_states), str(drop_long_exprs)))
+                    logger.debug("[sim_manager] Stepping once: %d | %s | drop invalid: %s | drop long: %s | max num states: %d | step timeout: %d" % (i, str(self), str(drop_invalid_states), str(drop_long_exprs), max_num_states, step_timeout))
                     if print_debug:
                         for state in self._stashes[stash]:
                             state_constraints = []
@@ -430,6 +430,8 @@ class SimulationManager:
                     if logger is not None:
                         logger.debug("[sim_manager][step] Timeout @ %s" % str(state))
                     successors = {'pruned': [state]}
+
+                signal.alarm(0)
             else:
                 successors = self.step_state(state, successor_func=successor_func, **run_args)
 

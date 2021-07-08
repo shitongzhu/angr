@@ -10,8 +10,15 @@ import mulpyplexer
 from .misc.hookset import HookSet
 from .misc.ux import once
 
+import random  # for sampling states
+import signal  # for timeoutting stepping
 import logging
 l = logging.getLogger(name=__name__)
+
+
+class StepTimeoutException(Exception):
+    # Don't do anyting for now.
+    pass
 
 
 class SimulationManager:
@@ -262,7 +269,7 @@ class SimulationManager:
         return self
 
     # Added pluggable logger
-    def run(self, stash='active', n=None, until=None, logger=None, drop_invalid_states=False, drop_long_exprs=False, **kwargs):
+    def run(self, stash='active', n=None, until=None, logger=None, drop_invalid_states=False, drop_long_exprs=False, print_debug=False, max_num_states=None, step_timeout=None, **kwargs):
         """
         Run until the SimulationManager has reached a completed state, according to
         the current exploration techniques. If no exploration techniques that define a completion
@@ -280,12 +287,13 @@ class SimulationManager:
             if not self.complete() and self._stashes[stash]:
                 if logger is not None:
                     logger.debug("[sim_manager] Stepping once: %d | %s | drop invalid: %s | drop long: %s" % (i, str(self), str(drop_invalid_states), str(drop_long_exprs)))
-                    for state in self._stashes[stash]:
-                        state_constraints = []
-                        for constraint in state.solver.constraints:
-                            state_constraints.append(str(constraint))
-                        logger.debug('[sim_manager] Constraints for state %s: %s' % (str(state), str(state_constraints)))
-                self.step(stash=stash, **kwargs)
+                    if print_debug:
+                        for state in self._stashes[stash]:
+                            state_constraints = []
+                            for constraint in state.solver.constraints:
+                                state_constraints.append(str(constraint))
+                            logger.debug('[sim_manager] Constraints for state %s: %s' % (str(state), str(state_constraints)))
+                self.step(stash=stash, step_timeout=step_timeout, logger=logger, **kwargs)
 
                 if drop_invalid_states:
                     for stash_name in ("errored", "deadended", "avoid", "unsat", "unconstrained", "pruned"):
@@ -310,6 +318,13 @@ class SimulationManager:
                     self._stashes[stash] = kept_states
                     self._stashes["pruned"].extend(dropped_states)
 
+                if max_num_states is not None:
+                     if len(self._stashes[stash]) > max_num_states:
+                        tmp_all_states = self._stashes[stash]
+                        ramdom.shuffle(tmp_all_states)
+                        self._stashes[stash] = tmp_all_states[:max_num_states]
+                        self._stashes["pruned"] = tmp_all_states[max_num_states:]
+
                 if not (until and until(self)):
                     continue
             break
@@ -325,8 +340,12 @@ class SimulationManager:
             return False
         return self.completion_mode(tech.complete(self) for tech in self._techniques if tech._is_overriden('complete'))
 
+    @staticmethod
+    def _step_timeout_alarm_handler(sig_num, frame):
+        raise StepTimeoutException()
+
     def step(self, stash='active', n=None, selector_func=None, step_func=None,
-             successor_func=None, until=None, filter_func=None, **run_args):
+             successor_func=None, until=None, filter_func=None, step_timeout=None, logger=None, **run_args):
         """
         Step a stash of states forward and categorize the successors appropriately.
 
@@ -362,6 +381,9 @@ class SimulationManager:
         :param size:            The maximum size of the block, in bytes.
         :param num_inst:        The maximum number of instructions.
         :param traceflags:      traceflags to be passed to VEX. Default: 0
+        @ NeuSE
+        :param step_timeout     Timeout (in second) each step takes at maximum.
+        :param logger           External logger.
 
         :returns:           The simulation manager, for chaining.
         :rtype:             SimulationManager
@@ -394,11 +416,22 @@ class SimulationManager:
 
             pre_errored = len(self._errored)
 
-            successors = self.step_state(state, successor_func=successor_func, **run_args)
-            # handle degenerate stepping cases here. desired behavior:
-            # if a step produced only unsat states, always add them to the unsat stash since this usually indicates a bug
-            # if a step produced sat states and save_unsat is False, drop the unsats
-            # if a step produced no successors, period, add the original state to deadended
+            if step_timeout is not None:
+                signal.signal(signal.SIGALRM, self._step_timeout_alarm_handler)
+                signal.alarm(step_timeout)
+                
+                try:
+                    successors = self.step_state(state, successor_func=successor_func, **run_args)
+                    # handle degenerate stepping cases here. desired behavior:
+                    # if a step produced only unsat states, always add them to the unsat stash since this usually indicates a bug
+                    # if a step produced sat states and save_unsat is False, drop the unsats
+                    # if a step produced no successors, period, add the original state to deadended
+                except StepTimeoutException:
+                    if logger is not None:
+                        logger.debug("[sim_manager][step] Timeout @ %s" % str(state))
+                    successors = {'pruned': [state]}
+            else:
+                successors = self.step_state(state, successor_func=successor_func, **run_args)
 
             # first check if anything happened besides unsat. that gates all this behavior
             if not any(v for k, v in successors.items() if k != 'unsat') and len(self._errored) == pre_errored:
@@ -715,6 +748,7 @@ class SimulationManager:
 
         self._clear_states(stash)
         self._store_states(stash, not_to_merge)
+        
         # Var tracing @ NeuSE
         if return_merged_bytes:
             return self, all_groups_merged_bytes

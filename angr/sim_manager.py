@@ -321,7 +321,7 @@ class SimulationManager:
                 if max_num_states is not None:
                      if len(self._stashes[stash]) > max_num_states:
                         tmp_all_states = self._stashes[stash]
-                        ramdom.shuffle(tmp_all_states)
+                        random.shuffle(tmp_all_states)
                         self._stashes[stash] = tmp_all_states[:max_num_states]
                         self._stashes["pruned"] = tmp_all_states[max_num_states:]
 

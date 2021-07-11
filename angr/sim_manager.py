@@ -275,7 +275,7 @@ class SimulationManager:
         return self
 
     # Added pluggable logger
-    def run(self, stash='active', n=None, until=None, logger=None, drop_invalid_states=False, drop_long_exprs=False, print_debug=False, max_num_states=None, step_timeout=None, per_state_step_timeout=None, **kwargs):
+    def run(self, stash='active', n=None, until=None, logger=None, drop_invalid_states=False, drop_long_exprs=False, print_debug=False, max_num_states=None, max_num_found_states=None, step_timeout=None, per_state_step_timeout=None, **kwargs):
         """
         Run until the SimulationManager has reached a completed state, according to
         the current exploration techniques. If no exploration techniques that define a completion
@@ -326,11 +326,18 @@ class SimulationManager:
                     self._stashes["pruned"].extend(dropped_states)
 
                 if max_num_states is not None:
-                     if len(self._stashes[stash]) > max_num_states:
+                    if len(self._stashes[stash]) > max_num_states:
                         tmp_all_states = self._stashes[stash]
                         random.shuffle(tmp_all_states)
                         self._stashes[stash] = tmp_all_states[:max_num_states]
                         self._stashes["pruned"] = tmp_all_states[max_num_states:]
+                    
+                if max_num_found_states is not None:
+                    if len(self._stashes["found"]) > max_num_found_states:
+                        tmp_all_states = self._stashes["found"]
+                        random.shuffle(tmp_all_states)
+                        self._stashes["found"] = tmp_all_states[:max_num_found_states]
+                        self._stashes["pruned"] = tmp_all_states[max_num_found_states:]
 
                 if not (until and until(self)):
                     continue

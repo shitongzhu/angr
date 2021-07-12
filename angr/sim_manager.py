@@ -483,10 +483,10 @@ class SimulationManager:
             
             except StepTimeoutException:
                 if logger is not None:
-                    logger.debug("[sim_manager][step] Timeout @ %s" % str(self._stashes[stash]))
+                    logger.debug("[sim_manager][step] Timeout w/ %d states in stash" % len(self._stashes[stash]))
             
             finally:
-                step_timeout_handler = signal.signal(signal.SIGVTALRM, self._step_timeout_alarm_handler)
+                signal.signal(signal.SIGVTALRM, step_timeout_handler)
                 signal.setitimer(signal.ITIMER_VIRTUAL, 0, 0)
         else:
             for state in self._fetch_states(stash=stash):

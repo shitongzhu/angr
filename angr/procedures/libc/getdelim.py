@@ -80,7 +80,7 @@ class __getdelim(angr.SimProcedure):
 
             malloc = angr.SIM_PROCEDURES['libc']['malloc']
 
-            dst = self.inline_call(malloc,real_size)
+            dst = self.inline_call(malloc,real_size).ret_expr  # ccef8ad1503feba827d64c22fc175d7af67b0df6
 
             self.state.memory.store(dst, data, size=real_size)
             self.state.memory.store(dst+real_size, b'\0')

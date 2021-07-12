@@ -86,6 +86,6 @@ class __getdelim(angr.SimProcedure):
             self.state.memory.store(dst+real_size, b'\0')
 
             self.state.memory.store(len_ptr,real_size)
-            self.state.memory.store(line_ptrptr,dst)
+            self.state.memory.store(line_ptrptr,dst).ret_expr
 
             return real_size

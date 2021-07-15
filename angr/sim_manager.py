@@ -26,7 +26,6 @@ class PerStateStepTimeoutException(Exception):
     pass
 
 
-
 class SimulationManager:
     """
     The Simulation Manager is the future future.
@@ -302,10 +301,6 @@ class SimulationManager:
                 
                     self.step(stash=stash, per_state_step_timeout=per_state_step_timeout, step_timeout=step_timeout, logger=logger, **kwargs)
 
-                if drop_invalid_states:
-                    for stash_name in ("errored", "deadended", "avoid", "unsat", "unconstrained", "pruned"):
-                        self.drop(stash=stash_name)
-                
                 if drop_long_exprs:
                     dropped_states = []
                     kept_states = []
@@ -339,6 +334,10 @@ class SimulationManager:
                         self._stashes["found"] = tmp_all_states[:max_num_found_states]
                         self._stashes["pruned"] = tmp_all_states[max_num_found_states:]
 
+                if drop_invalid_states:
+                    for stash_name in ("errored", "deadended", "avoid", "unsat", "unconstrained", "pruned"):
+                        self.drop(stash=stash_name)
+
                 if not (until and until(self)):
                     continue
             break
@@ -365,7 +364,7 @@ class SimulationManager:
 
     def step(self, stash='active', n=None, selector_func=None, step_func=None,
              successor_func=None, until=None, filter_func=None, step_timeout=None,
-             per_state_step_timeout=None, logger=None, **run_args):
+             per_state_step_timeout=None, logger=None, debug=True, **run_args):
         """
         Step a stash of states forward and categorize the successors appropriately.
 
@@ -422,10 +421,15 @@ class SimulationManager:
         bucket = defaultdict(list)
 
         if step_timeout is not None:
-            step_timeout_handler = signal.signal(signal.SIGVTALRM, self._step_timeout_alarm_handler)
-            signal.setitimer(signal.ITIMER_VIRTUAL, step_timeout, 0)
 
             try:
+                signal.signal(signal.SIGVTALRM, self._step_timeout_alarm_handler)
+                #signal.signal(signal.SIGALRM, self._per_state_step_timeout_alarm_handler)
+                signal.setitimer(signal.ITIMER_VIRTUAL, step_timeout)
+
+                if debug and logger:
+                    logger.debug("[sim_manager][step][debug] SIGVTALRM handler set @ SimManager %s" % str(self))
+
                 for state in self._fetch_states(stash=stash):
 
                     goto = self.filter(state, filter_func=filter_func)
@@ -443,10 +447,13 @@ class SimulationManager:
                     pre_errored = len(self._errored)
 
                     if per_state_step_timeout is not None:
-                        per_state_step_timeout_handler = signal.signal(signal.SIGALRM, self._per_state_step_timeout_alarm_handler)
-                        signal.alarm(per_state_step_timeout)
                         
                         try:
+                            signal.signal(signal.SIGALRM, self._per_state_step_timeout_alarm_handler)
+                            signal.setitimer(signal.ITIMER_REAL, per_state_step_timeout)
+                            if debug and logger:
+                                logger.debug("[sim_manager][step][debug] SIGALRM handler set @ SimState %s" % str(state))
+
                             successors = self.step_state(state, successor_func=successor_func, **run_args)
                             # handle degenerate stepping cases here. desired behavior:
                             # if a step produced only unsat states, always add them to the unsat stash since this usually indicates a bug
@@ -457,8 +464,10 @@ class SimulationManager:
                                 logger.debug("[sim_manager][step] Per-state timeout @ %s" % str(state))
                             successors = {'pruned': [state]}
                         finally:
-                            signal.signal(signal.SIGALRM, per_state_step_timeout_handler)
-                            signal.alarm(0)  # disable the alarm
+                            signal.setitimer(signal.ITIMER_REAL, 0)  # disable the alarm
+                            signal.signal(signal.SIGALRM, signal.SIG_DFL)
+                            if debug and logger:
+                                logger.debug("[sim_manager][step][debug] SIGALRM handler disabled @ SimState %s" % str(state))
 
                     else:
                         successors = self.step_state(state, successor_func=successor_func, **run_args)
@@ -483,11 +492,18 @@ class SimulationManager:
             
             except StepTimeoutException:
                 if logger is not None:
-                    logger.debug("[sim_manager][step] Timeout w/ %d states in stash" % len(self._stashes[stash]))
+                    logger.debug("[sim_manager][step] Timeout at SimManager %s" % str(self))
             
             finally:
-                signal.signal(signal.SIGVTALRM, step_timeout_handler)
-                signal.setitimer(signal.ITIMER_VIRTUAL, 0, 0)
+                signal.setitimer(signal.ITIMER_VIRTUAL, 0)  # disable timeout
+                signal.signal(signal.SIGVTALRM, signal.SIG_DFL)
+                
+                #signal.setitimer(signal.ITIMER_REAL, 0)  # disable the alarm -- is it possible the outer timeout is trigger but the inner timeout is still de-registered?
+                #signal.signal(signal.SIGALRM, signal.SIG_DFL)
+
+                if debug and logger:
+                    logger.debug("[sim_manager][step][debug] SIGVTALRM/SIGALRM handler disabled @ SimManager %s" % str(self))
+
         else:
             for state in self._fetch_states(stash=stash):
 
@@ -506,8 +522,8 @@ class SimulationManager:
                 pre_errored = len(self._errored)
 
                 if per_state_step_timeout is not None:
-                    per_state_step_timeout_handler = signal.signal(signal.SIGALRM, self._per_state_step_timeout_alarm_handler)
-                    signal.alarm(per_state_step_timeout)
+                    signal.signal(signal.SIGALRM, self._per_state_step_timeout_alarm_handler)
+                    signal.setitimer(signal.ITIMER_REAL, per_state_step_timeout, 0)
                     
                     try:
                         successors = self.step_state(state, successor_func=successor_func, **run_args)
@@ -520,8 +536,8 @@ class SimulationManager:
                             logger.debug("[sim_manager][step] Per-state timeout @ %s" % str(state))
                         successors = {'pruned': [state]}
                     finally:
-                        signal.signal(signal.SIGALRM, per_state_step_timeout_handler)
-                        signal.alarm(0)  # disable the alarm
+                        signal.setitimer(signal.ITIMER_REAL, 0, 0)  # disable the alarm
+                        signal.signal(signal.SIGALRM, signal.SIG_DFL)
 
                 else:
                     successors = self.step_state(state, successor_func=successor_func, **run_args)
@@ -543,7 +559,6 @@ class SimulationManager:
 
                 for to_stash, successor_states in successors.items():
                     bucket[to_stash or stash].extend(successor_states)
-
 
         self._clear_states(stash=stash)
         for to_stash, states in bucket.items():

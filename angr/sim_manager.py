@@ -467,7 +467,7 @@ class SimulationManager:
                 elapsed_time = step_curr_ts - step_start_ts
                 if elapsed_time > float(step_timeout):
                     if logger is not None:
-                        logger.debug("[sim_manager][step] Time elapsed in step $s excceds specified timeout %f. Halting..." % str(state), float(step_timeout))            
+                        logger.debug("[sim_manager][step] Time elapsed in step %s excceds specified timeout %f. Halting..." % (str(state), float(step_timeout)))
                     break  # exit and essentially discard all remaining states in the current stash
             
         self._clear_states(stash=stash)

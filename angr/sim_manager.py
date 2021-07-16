@@ -11,7 +11,7 @@ from .misc.hookset import HookSet
 from .misc.ux import once
 
 import random  # for sampling states
-import signal  # for timeoutting stepping
+import time  # for timeoutting stepping
 import logging
 l = logging.getLogger(name=__name__)
 
@@ -274,7 +274,7 @@ class SimulationManager:
         return self
 
     # Added pluggable logger
-    def run(self, stash='active', n=None, until=None, logger=None, drop_invalid_states=False, drop_long_exprs=False, print_debug=False, max_num_states=None, max_num_found_states=None, step_timeout=None, per_state_step_timeout=None, **kwargs):
+    def run(self, stash='active', n=None, until=None, logger=None, drop_invalid_states=False, drop_long_exprs=False, print_debug=False, max_num_states=None, max_num_found_states=None, step_timeout=None, **kwargs):
         """
         Run until the SimulationManager has reached a completed state, according to
         the current exploration techniques. If no exploration techniques that define a completion
@@ -291,7 +291,7 @@ class SimulationManager:
         for i in (itertools.count() if n is None else range(0, n)):
             if not self.complete() and self._stashes[stash]:
                 if logger is not None:
-                    logger.debug("[sim_manager] Stepping once: %d | %s | drop invalid: %s | drop long: %s | max num states: %d | per state step timeout: %d | step timeout: %d" % (i, str(self), str(drop_invalid_states), str(drop_long_exprs), max_num_states, per_state_step_timeout, step_timeout))
+                    logger.debug("[sim_manager] Stepping once: %d | %s | drop invalid: %s | drop long: %s | max num states: %d | step timeout: %f" % (i, str(self), str(drop_invalid_states), str(drop_long_exprs), max_num_states, float(step_timeout)))
                     if print_debug:
                         for state in self._stashes[stash]:
                             state_constraints = []
@@ -299,7 +299,7 @@ class SimulationManager:
                                 state_constraints.append(str(constraint))
                             logger.debug('[sim_manager] Constraints for state %s: %s' % (str(state), str(state_constraints)))
                 
-                    self.step(stash=stash, per_state_step_timeout=per_state_step_timeout, step_timeout=step_timeout, logger=logger, **kwargs)
+                    self.step(stash=stash, step_timeout=step_timeout, logger=logger, **kwargs)
 
                 if drop_long_exprs:
                     dropped_states = []
@@ -364,7 +364,7 @@ class SimulationManager:
 
     def step(self, stash='active', n=None, selector_func=None, step_func=None,
              successor_func=None, until=None, filter_func=None, step_timeout=None,
-             per_state_step_timeout=None, logger=None, debug=True, **run_args):
+             logger=None, **run_args):
         """
         Step a stash of states forward and categorize the successors appropriately.
 
@@ -401,7 +401,6 @@ class SimulationManager:
         :param num_inst:        The maximum number of instructions.
         :param traceflags:      traceflags to be passed to VEX. Default: 0
         @ NeuSE
-        :param per_state_step_timeout     Timeout (in second) a step of each state takes at maximum.
         :param step_timeout     Timeout (in second) a step of all states takes at maximum.
         :param logger           External logger.
 
@@ -420,146 +419,57 @@ class SimulationManager:
         # ------------------ Compatibility layer ---------------->8
         bucket = defaultdict(list)
 
-        if step_timeout is not None:
+        if step_timeout:
+            step_start_ts = time.time()
 
-            try:
-                signal.signal(signal.SIGVTALRM, self._step_timeout_alarm_handler)
-                #signal.signal(signal.SIGALRM, self._per_state_step_timeout_alarm_handler)
-                signal.setitimer(signal.ITIMER_VIRTUAL, step_timeout)
+        for state in self._fetch_states(stash=stash):
 
-                if debug and logger:
-                    logger.debug("[sim_manager][step][debug] SIGVTALRM handler set @ SimManager %s" % str(self))
+            goto = self.filter(state, filter_func=filter_func)
+            if isinstance(goto, tuple):
+                goto, state = goto
 
-                for state in self._fetch_states(stash=stash):
+            if goto not in (None, stash):
+                bucket[goto].append(state)
+                continue
 
-                    goto = self.filter(state, filter_func=filter_func)
-                    if isinstance(goto, tuple):
-                        goto, state = goto
+            if not self.selector(state, selector_func=selector_func):
+                bucket[stash].append(state)
+                continue
 
-                    if goto not in (None, stash):
-                        bucket[goto].append(state)
-                        continue
+            pre_errored = len(self._errored)
 
-                    if not self.selector(state, selector_func=selector_func):
-                        bucket[stash].append(state)
-                        continue
+            successors = self.step_state(state, successor_func=successor_func, **run_args)
+            # handle degenerate stepping cases here. desired behavior:
+            # if a step produced only unsat states, always add them to the unsat stash since this usually indicates a bug
+            # if a step produced sat states and save_unsat is False, drop the unsats
+            # if a step produced no successors, period, add the original state to deadended
 
-                    pre_errored = len(self._errored)
-
-                    if per_state_step_timeout is not None:
-                        
-                        try:
-                            signal.signal(signal.SIGALRM, self._per_state_step_timeout_alarm_handler)
-                            signal.setitimer(signal.ITIMER_REAL, per_state_step_timeout)
-                            if debug and logger:
-                                logger.debug("[sim_manager][step][debug] SIGALRM handler set @ SimState %s" % str(state))
-
-                            successors = self.step_state(state, successor_func=successor_func, **run_args)
-                            # handle degenerate stepping cases here. desired behavior:
-                            # if a step produced only unsat states, always add them to the unsat stash since this usually indicates a bug
-                            # if a step produced sat states and save_unsat is False, drop the unsats
-                            # if a step produced no successors, period, add the original state to deadended
-                        except PerStateStepTimeoutException:
-                            if logger is not None:
-                                logger.debug("[sim_manager][step] Per-state timeout @ %s" % str(state))
-                            successors = {'pruned': [state]}
-                        finally:
-                            signal.setitimer(signal.ITIMER_REAL, 0)  # disable the alarm
-                            signal.signal(signal.SIGALRM, signal.SIG_DFL)
-                            if debug and logger:
-                                logger.debug("[sim_manager][step][debug] SIGALRM handler disabled @ SimState %s" % str(state))
-
-                    else:
-                        successors = self.step_state(state, successor_func=successor_func, **run_args)
-
-                    # first check if anything happened besides unsat. that gates all this behavior
-                    if not any(v for k, v in successors.items() if k != 'unsat') and len(self._errored) == pre_errored:
-                        # then check if there were some unsats
-                        if successors.get('unsat', []):
-                            # only unsats. current setup is acceptable.
-                            pass
-                        else:
-                            # no unsats. we've deadended.
-                            bucket['deadended'].append(state)
-                            continue
-                    else:
-                        # there were sat states. it's okay to drop the unsat ones if the user said so.
-                        if not self._save_unsat:
-                            successors.pop('unsat', None)
-
-                    for to_stash, successor_states in successors.items():
-                        bucket[to_stash or stash].extend(successor_states)
-            
-            except StepTimeoutException:
-                if logger is not None:
-                    logger.debug("[sim_manager][step] Timeout at SimManager %s" % str(self))
-            
-            finally:
-                signal.setitimer(signal.ITIMER_VIRTUAL, 0)  # disable timeout
-                signal.signal(signal.SIGVTALRM, signal.SIG_DFL)
-                
-                #signal.setitimer(signal.ITIMER_REAL, 0)  # disable the alarm -- is it possible the outer timeout is trigger but the inner timeout is still de-registered?
-                #signal.signal(signal.SIGALRM, signal.SIG_DFL)
-
-                if debug and logger:
-                    logger.debug("[sim_manager][step][debug] SIGVTALRM/SIGALRM handler disabled @ SimManager %s" % str(self))
-
-        else:
-            for state in self._fetch_states(stash=stash):
-
-                goto = self.filter(state, filter_func=filter_func)
-                if isinstance(goto, tuple):
-                    goto, state = goto
-
-                if goto not in (None, stash):
-                    bucket[goto].append(state)
-                    continue
-
-                if not self.selector(state, selector_func=selector_func):
-                    bucket[stash].append(state)
-                    continue
-
-                pre_errored = len(self._errored)
-
-                if per_state_step_timeout is not None:
-                    signal.signal(signal.SIGALRM, self._per_state_step_timeout_alarm_handler)
-                    signal.setitimer(signal.ITIMER_REAL, per_state_step_timeout, 0)
-                    
-                    try:
-                        successors = self.step_state(state, successor_func=successor_func, **run_args)
-                        # handle degenerate stepping cases here. desired behavior:
-                        # if a step produced only unsat states, always add them to the unsat stash since this usually indicates a bug
-                        # if a step produced sat states and save_unsat is False, drop the unsats
-                        # if a step produced no successors, period, add the original state to deadended
-                    except PerStateStepTimeoutException:
-                        if logger is not None:
-                            logger.debug("[sim_manager][step] Per-state timeout @ %s" % str(state))
-                        successors = {'pruned': [state]}
-                    finally:
-                        signal.setitimer(signal.ITIMER_REAL, 0, 0)  # disable the alarm
-                        signal.signal(signal.SIGALRM, signal.SIG_DFL)
-
+            # first check if anything happened besides unsat. that gates all this behavior
+            if not any(v for k, v in successors.items() if k != 'unsat') and len(self._errored) == pre_errored:
+                # then check if there were some unsats
+                if successors.get('unsat', []):
+                    # only unsats. current setup is acceptable.
+                    pass
                 else:
-                    successors = self.step_state(state, successor_func=successor_func, **run_args)
+                    # no unsats. we've deadended.
+                    bucket['deadended'].append(state)
+                    continue
+            else:
+                # there were sat states. it's okay to drop the unsat ones if the user said so.
+                if not self._save_unsat:
+                    successors.pop('unsat', None)
 
-                # first check if anything happened besides unsat. that gates all this behavior
-                if not any(v for k, v in successors.items() if k != 'unsat') and len(self._errored) == pre_errored:
-                    # then check if there were some unsats
-                    if successors.get('unsat', []):
-                        # only unsats. current setup is acceptable.
-                        pass
-                    else:
-                        # no unsats. we've deadended.
-                        bucket['deadended'].append(state)
-                        continue
-                else:
-                    # there were sat states. it's okay to drop the unsat ones if the user said so.
-                    if not self._save_unsat:
-                        successors.pop('unsat', None)
+            for to_stash, successor_states in successors.items():
+                bucket[to_stash or stash].extend(successor_states)
 
-                for to_stash, successor_states in successors.items():
-                    bucket[to_stash or stash].extend(successor_states)
-
+            if step_timeout:
+                step_curr_ts = time.time()
+                elapsed_time = step_curr_ts - step_start_ts
+                if elapsed_time > float(step_timeout):
+                    if logger is not None:
+                        logger.debug("[sim_manager][step] Time elapsed in step $s excceds specified timeout %f. Halting..." % str(state), float(step_timeout))            
+                    break  # exit and essentially discard all remaining states in the current stash
+            
         self._clear_states(stash=stash)
         for to_stash, states in bucket.items():
             self._store_states(to_stash or stash, states)

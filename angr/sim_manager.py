@@ -274,7 +274,7 @@ class SimulationManager:
         return self
 
     # Added pluggable logger
-    def run(self, stash='active', n=None, until=None, logger=None, drop_invalid_states=False, drop_long_exprs=False, print_debug=False, max_num_states=None, max_num_found_states=None, step_timeout=None, **kwargs):
+    def run(self, stash='active', n=None, until=None, logger=None, drop_invalid_states=False, drop_long_exprs=False, print_debug=False, max_num_states=None, max_num_found_states=None, step_timeout=None, print_vars=True, **kwargs):
         """
         Run until the SimulationManager has reached a completed state, according to
         the current exploration techniques. If no exploration techniques that define a completion
@@ -299,12 +299,14 @@ class SimulationManager:
                                 state_constraints.append(str(constraint))
                             logger.debug('[sim_manager] Constraints for state %s: %s' % (str(state), str(state_constraints)))
                 
-                    self.step(stash=stash, step_timeout=step_timeout, logger=logger, **kwargs)
+                self.step(stash=stash, step_timeout=step_timeout, logger=logger, **kwargs)
 
                 if drop_long_exprs:
                     dropped_states = []
                     kept_states = []
                     for state in self._stashes[stash]:
+                        if print_vars:
+                            logger.debug("Vars: %s" % (state.solver.describe_variables()))
                         for constraint in state.solver.constraints:
                             if constraint.length is not None:
                                 if logger is not None:
